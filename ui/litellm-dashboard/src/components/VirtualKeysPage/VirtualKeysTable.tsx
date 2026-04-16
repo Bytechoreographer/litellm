@@ -562,7 +562,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         );
       },
     },
-  ], [teams, resolvedOrganizations, expandedAccordions]);
+  ], [teams, resolvedOrganizations]);
 
   const filterOptions: FilterOption[] = [
     {
