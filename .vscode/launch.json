@@ -1,0 +1,202 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    // ──────────────────────────────────────────────────────────────
+    //  Backend — Dev
+    //  对应 pep-cd/llm-api-gateway/dev.yaml
+    //  数据库：litellm_dev，版本动态从 pep-cd/llm-api-gateway/dev.yaml 读取
+    // ──────────────────────────────────────────────────────────────
+    {
+      "name": "Backend: LiteLLM Proxy (Dev)",
+      "type": "debugpy",
+      "request": "launch",
+      "preLaunchTask": "check-tag: Dev",
+      "module": "litellm.proxy.proxy_cli",
+      "args": [
+        "--config",
+        "${workspaceFolder}/.vscode/proxy_config.dev.yaml",
+        "--port",
+        "4000"
+      ],
+      "cwd": "${workspaceFolder}",
+      "justMyCode": false,
+      "env": {
+        // "SKIP_TAG_CHECK": "1",  // 取消注释可跳过 tag 检查强制启动
+        // ── 数据库 ──
+        "DATABASE_URL": "postgresql://root:DDInfraABPP%40ss%23%40!@963dcb2e63e249428847c22a5ca528d2in03.internal.cn-east-3.postgresql.rds.myhuaweicloud.com:5432/litellm_dev",
+        // ── LiteLLM 基础配置 ──
+        "LITELLM_MASTER_KEY": "sk-VinoeroRitur2KL1MAgm",
+        "LITELLM_SALT_KEY": "sk-oKs",
+        "LITELLM_MODE": "PRODUCTION",
+        "STORE_MODEL_IN_DB": "True",
+        // ── Redis ──
+        "REDIS_HOST": "redis-1dd891fe-05bb-4930-847c-af64294ee046.cn-east-3.dcs.myhuaweicloud.com",
+        "REDIS_PORT": "6379",
+        "REDIS_PASSWORD": "DDInfraProdP@ss",
+        // ── 时区 ──
+        "TZ": "Asia/Shanghai",
+        // ── 模型 API Keys ──
+        "AZURE_OPENAI_API_KEY": "4fd7a6b53efb444e914dcee1339fe778",
+        "VOLCENGINE_API_KEY": "5357d45f-f888-484f-b7ef-3f426f4dcc1a",
+        // ── 代理（需要访问内网 Redis / PG 时保持；本地直连可删除）──
+        "HTTP_PROXY": "http://10.34.6.157:3128",
+        "HTTPS_PROXY": "http://10.34.6.157:3128",
+        "http_proxy": "http://10.34.6.157:3128",
+        "https_proxy": "http://10.34.6.157:3128",
+        "NO_PROXY": "localhost,127.0.0.1,172.0.0.0/8,.local,dify-sandbox,.momenta.works,10.0.0.0/8,.deepseek.com,.azure.com,.aliyuncs.com,.volces.com,.ivolces.com,.myhuaweicloud.com,10.251.17.49,10.251.18.82,10.22.5.20,10.251.18.138,.openrouter.ai",
+        "no_proxy": "localhost,127.0.0.1,172.0.0.0/8,.local,dify-sandbox,.momenta.works,10.0.0.0/8,.deepseek.com,.azure.com,.aliyuncs.com,.volces.com,.ivolces.com,.myhuaweicloud.com,10.251.17.49,10.251.18.82,10.22.5.20,10.251.18.138,.openrouter.ai"
+      }
+    },
+
+    // ──────────────────────────────────────────────────────────────
+    //  Backend — Prod
+    //  对应 pep-cd/llm-api-gateway/prod.yaml
+    //  数据库：litellm（生产库），版本动态从 pep-cd/llm-api-gateway/prod.yaml 读取
+    //  ⚠️  启动前 preLaunchTask 会自动提示需要切到哪个 tag
+    // ──────────────────────────────────────────────────────────────
+    {
+      "name": "Backend: LiteLLM Proxy (Prod)",
+      "type": "debugpy",
+      "request": "launch",
+      "preLaunchTask": "check-tag: Prod",
+      "module": "litellm.proxy.proxy_cli",
+      "args": [
+        "--config",
+        "${workspaceFolder}/.vscode/proxy_config.prod.yaml",
+        "--port",
+        "4000"
+      ],
+      "cwd": "${workspaceFolder}",
+      "justMyCode": false,
+      "env": {
+        // "SKIP_TAG_CHECK": "1",  // 取消注释可跳过 tag 检查强制启动
+        // ── 数据库 ──
+        "DATABASE_URL": "postgresql://root:DDInfraABPP%40ss%23%40!@963dcb2e63e249428847c22a5ca528d2in03.internal.cn-east-3.postgresql.rds.myhuaweicloud.com:5432/litellm",
+        // ── LiteLLM 基础配置 ──
+        "LITELLM_MASTER_KEY": "sk-VinoeroRitur2KL1MAgm",
+        "LITELLM_SALT_KEY": "sk-oKs",
+        "LITELLM_MODE": "PRODUCTION",
+        "STORE_MODEL_IN_DB": "True",
+        // ── Redis ──
+        "REDIS_HOST": "redis-1dd891fe-05bb-4930-847c-af64294ee046.cn-east-3.dcs.myhuaweicloud.com",
+        "REDIS_PORT": "6379",
+        "REDIS_PASSWORD": "DDInfraProdP@ss",
+        // ── 时区 ──
+        "TZ": "Asia/Shanghai",
+        // ── 模型 API Keys ──
+        "AZURE_OPENAI_API_KEY": "4fd7a6b53efb444e914dcee1339fe778",
+        "VOLCENGINE_API_KEY": "5357d45f-f888-484f-b7ef-3f426f4dcc1a",
+        // ── 代理 ──
+        "HTTP_PROXY": "http://10.34.6.157:3128",
+        "HTTPS_PROXY": "http://10.34.6.157:3128",
+        "http_proxy": "http://10.34.6.157:3128",
+        "https_proxy": "http://10.34.6.157:3128",
+        "NO_PROXY": "localhost,127.0.0.1,172.0.0.0/8,.local,dify-sandbox,.momenta.works,10.0.0.0/8,.deepseek.com,.azure.com,.aliyuncs.com,.volces.com,.ivolces.com,.myhuaweicloud.com,.edgecloudapp.com,10.251.17.49,10.251.18.82,10.22.5.20,10.251.18.138",
+        "no_proxy": "localhost,127.0.0.1,172.0.0.0/8,.local,dify-sandbox,.momenta.works,10.0.0.0/8,.deepseek.com,.azure.com,.aliyuncs.com,.volces.com,.ivolces.com,.myhuaweicloud.com,.edgecloudapp.com,10.251.17.49,10.251.18.82,10.22.5.20,10.251.18.138"
+      }
+    },
+
+    // ──────────────────────────────────────────────────────────────
+    //  Frontend
+    //  切换后端：保留其中一行 NEXT_PUBLIC_BASE_URL，注释掉另一行
+    //  · 本地后端：需先启动 "Backend: LiteLLM Proxy (Dev/Prod)"
+    //  · K8s 后端：直接选下方 "Frontend: Dashboard (K8s Dev/Prod)"，
+    //              preLaunchTask 会自动 port-forward，无需额外操作
+    // ──────────────────────────────────────────────────────────────
+    {
+      "name": "Frontend: Dashboard (local backend)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev",
+      "cwd": "${workspaceFolder}/ui/litellm-dashboard",
+      "env": {
+        "NODE_ENV": "development",
+        // ── 本地后端（配合 Backend Dev/Prod 使用）──
+        "NEXT_PUBLIC_BASE_URL": "http://localhost:4000"
+      }
+    },
+
+    // ──────────────────────────────────────────────────────────────
+    //  Frontend — 纯前端，后端走 K8s Dev
+    //  自动 port-forward: web-dev-a / pep-dev / llm-api-gateway → localhost:4001
+    //  不需要启动本地后端进程
+    // ──────────────────────────────────────────────────────────────
+    {
+      "name": "Frontend: Dashboard (K8s Dev)",
+      "type": "node-terminal",
+      "request": "launch",
+      "preLaunchTask": "port-forward: K8s Dev",
+      "command": "npm run dev",
+      "cwd": "${workspaceFolder}/ui/litellm-dashboard",
+      "env": {
+        "NODE_ENV": "development",
+        // ── 切换环境：保留其中一行，注释另一行 ──────────────────
+        "NEXT_PUBLIC_LITELLM_PROXY_URL": "http://localhost:4001",
+        // "NEXT_PUBLIC_LITELLM_PROXY_URL": "http://localhost:4002",  // ← 切到 K8s Prod
+        // ── 代理（让 next/font 能下载 Google Fonts；NO_PROXY 保证
+        //         localhost:4001 的后端请求不走代理）──
+        "HTTP_PROXY": "http://10.34.6.157:3128",
+        "HTTPS_PROXY": "http://10.34.6.157:3128",
+        "http_proxy": "http://10.34.6.157:3128",
+        "https_proxy": "http://10.34.6.157:3128",
+        "NO_PROXY": "localhost,127.0.0.1",
+        "no_proxy": "localhost,127.0.0.1"
+      }
+    },
+
+    // ──────────────────────────────────────────────────────────────
+    //  Frontend — 纯前端，后端走 K8s Prod
+    //  自动 port-forward: web-a / pep-prod / llm-api-gateway → localhost:4002
+    //  不需要启动本地后端进程
+    // ──────────────────────────────────────────────────────────────
+    {
+      "name": "Frontend: Dashboard (K8s Prod)",
+      "type": "node-terminal",
+      "request": "launch",
+      "preLaunchTask": "port-forward: K8s Prod",
+      "command": "npm run dev",
+      "cwd": "${workspaceFolder}/ui/litellm-dashboard",
+      "env": {
+        "NODE_ENV": "development",
+        // ── 切换环境：保留其中一行，注释另一行 ──────────────────
+        // "NEXT_PUBLIC_LITELLM_PROXY_URL": "http://localhost:4001",  // ← 切到 K8s Dev
+        "NEXT_PUBLIC_LITELLM_PROXY_URL": "http://localhost:4002",
+        // ── 代理 ──
+        "HTTP_PROXY": "http://10.34.6.157:3128",
+        "HTTPS_PROXY": "http://10.34.6.157:3128",
+        "http_proxy": "http://10.34.6.157:3128",
+        "https_proxy": "http://10.34.6.157:3128",
+        "NO_PROXY": "localhost,127.0.0.1",
+        "no_proxy": "localhost,127.0.0.1"
+      }
+    },
+
+    // ──────────────────────────────────────────────────────────────
+    //  Frontend — 测试环境调试（对应 K8s dev: v1.83.7-stable）
+    //  preLaunchTask 自动起本地后端（port 4000）
+    //  当前分支：mmt-patch/v1.83.7-nightly（与测试环境镜像版本一致）
+    // ──────────────────────────────────────────────────────────────
+    {
+      "name": "Frontend: Dashboard (Dev test)",
+      "type": "node-terminal",
+      "request": "launch",
+      "preLaunchTask": "backend: v1.83.7 Dev (port 4000)",
+      "command": "npm run dev",
+      "cwd": "${workspaceFolder}/ui/litellm-dashboard",
+      "env": {
+        "NODE_ENV": "development",
+        // 启用 rewrites 模式：前端用相对 URL，next dev 代理所有 API 到后端
+        // 无需 NEXT_PUBLIC_BASE_URL，避免 login redirect 跳到 4000 造成 chunk 404
+        "NEXT_PUBLIC_USE_REWRITES": "true",
+        "LITELLM_BACKEND_URL": "http://localhost:4000",
+        // ── 代理（next/font 下载 Google Fonts 用；localhost 流量走直连）──
+        "HTTP_PROXY": "http://10.34.6.157:3128",
+        "HTTPS_PROXY": "http://10.34.6.157:3128",
+        "http_proxy": "http://10.34.6.157:3128",
+        "https_proxy": "http://10.34.6.157:3128",
+        "NO_PROXY": "localhost,127.0.0.1",
+        "no_proxy": "localhost,127.0.0.1"
+      }
+    }
+  ]
+}

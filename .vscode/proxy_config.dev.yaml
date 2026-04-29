@@ -1,0 +1,49 @@
+# =============================================================================
+# 本地调试专用 config，对应 pep-cd/llm-api-gateway/dev.yaml configMap.data.config.yaml
+# 不修改项目原有的 proxy_server_config.yaml
+#
+# 敏感信息（DATABASE_URL / LITELLM_MASTER_KEY / LITELLM_SALT_KEY /
+# REDIS_PASSWORD / VOLCENGINE_API_KEY / AZURE_OPENAI_API_KEY 等）
+# 全部通过 .vscode/launch.json 的 env 块注入，不写入此文件
+# =============================================================================
+
+model_list:
+  # - model_name: gpt-4o
+  #   litellm_params:
+  #     model: azure/gpt-4o
+  #     api_base: https://ddinfra-openai-us-northcentral.openai.azure.com
+  #     api_key: os.environ/AZURE_OPENAI_API_KEY
+  #     api_version: 2024-10-01-preview
+  - model_name: Qwen3-235B-A22B
+    litellm_params:
+      model: hosted_vllm/Qwen3-235B-A22B
+      api_base: http://10.251.18.138:30290/v1
+    model_info:
+      input_cost_per_token: 0.000001
+      output_cost_per_token: 0.000001
+
+router_settings:
+  routing_strategy: usage-based-routing-v2
+  optional_pre_call_checks:
+    - deployment_affinity
+  deployment_affinity_ttl_seconds: 600
+  redis_host: os.environ/REDIS_HOST
+  redis_port: os.environ/REDIS_PORT
+  redis_password: os.environ/REDIS_PASSWORD
+
+general_settings:
+  use_redis_transaction_buffer: true
+  store_prompts_in_spend_logs: true
+  # ── 以下两项仅本地调试需要，生产由 K8s secret / env 注入，不写入 configmap ──
+  master_key: os.environ/LITELLM_MASTER_KEY
+  store_model_in_db: true
+
+litellm_settings:
+  drop_params: true
+  modify_params: true
+  cache: true
+  cache_params:
+    type: redis
+    host: os.environ/REDIS_HOST
+    port: os.environ/REDIS_PORT
+    password: os.environ/REDIS_PASSWORD

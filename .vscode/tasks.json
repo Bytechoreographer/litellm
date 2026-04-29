@@ -1,0 +1,207 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    // ── 生成 Prisma Client（schema 变更后首次启动会自动触发）──
+    {
+      "label": "prisma: generate",
+      "type": "shell",
+      "command": "prisma",
+      "args": [
+        "generate",
+        "--schema=${workspaceFolder}/litellm/proxy/schema.prisma"
+      ],
+      "options": {
+        "env": {
+          "HTTP_PROXY": "http://10.34.6.157:3128",
+          "HTTPS_PROXY": "http://10.34.6.157:3128",
+          "http_proxy": "http://10.34.6.157:3128",
+          "https_proxy": "http://10.34.6.157:3128"
+        }
+      },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "clear": false
+      },
+      "problemMatcher": []
+    },
+
+    // tag 从 pep-cd yaml 中动态读取，每次启动自动 git pull pep-cd 拿最新版本
+    {
+      "label": "check-tag: Dev",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "${workspaceFolder}/.vscode/check-tag.sh",
+        "${workspaceFolder}/../pep-cd/llm-api-gateway/dev.yaml"
+      ],
+      "dependsOn": ["prisma: generate"],
+      "dependsOrder": "sequence",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "focus": true,
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "check-tag: Prod",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "${workspaceFolder}/.vscode/check-tag.sh",
+        "${workspaceFolder}/../pep-cd/llm-api-gateway/prod.yaml"
+      ],
+      "dependsOn": ["prisma: generate"],
+      "dependsOrder": "sequence",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "focus": true,
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+
+    // ──────────────────────────────────────────────────────────────
+    //  前端 build — 编译 Next.js 并更新 _experimental/out/
+    //  后端启动前自动触发，确保 UI 改动生效
+    // ──────────────────────────────────────────────────────────────
+    {
+      "label": "ui: build",
+      "type": "shell",
+      "command": "npm run build && cp -r out/* ${workspaceFolder}/litellm/proxy/_experimental/out/",
+      "options": {
+        "cwd": "${workspaceFolder}/ui/litellm-dashboard",
+        "env": {
+          "HTTP_PROXY": "http://10.34.6.157:3128",
+          "HTTPS_PROXY": "http://10.34.6.157:3128",
+          "http_proxy": "http://10.34.6.157:3128",
+          "https_proxy": "http://10.34.6.157:3128",
+          "NO_PROXY": "localhost,127.0.0.1",
+          "no_proxy": "localhost,127.0.0.1"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+
+    // ──────────────────────────────────────────────────────────────
+    //  LiteLLM 后端 — v1.83.7-stable，本地 port 4000
+    //  配置复用 .vscode/proxy_config.dev.yaml（env 由 launch.json 注入）
+    //  port 4000 = 前端 networking.tsx 的硬编码默认值，无需改代码
+    //  此 task 作为 "Frontend: Dashboard (Dev test)" 的 preLaunchTask 自动触发
+    // ──────────────────────────────────────────────────────────────
+    {
+      "label": "backend: v1.83.7 Dev (port 4000)",
+      "type": "shell",
+      "command": "python3 -m litellm.proxy.proxy_cli --config ${workspaceFolder}/.vscode/proxy_config.dev.yaml --port 4000",
+      "dependsOn": ["prisma: generate",],
+      // "dependsOn": ["ui: build", "prisma: generate"],
+      "dependsOrder": "sequence",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "DATABASE_URL": "postgresql://root:DDInfraABPP%40ss%23%40!@963dcb2e63e249428847c22a5ca528d2in03.internal.cn-east-3.postgresql.rds.myhuaweicloud.com:5432/litellm_dev",
+          "LITELLM_MASTER_KEY": "sk-VinoeroRitur2KL1MAgm",
+          "LITELLM_SALT_KEY": "sk-oKs",
+          "LITELLM_MODE": "PRODUCTION",
+          "STORE_MODEL_IN_DB": "True",
+          "REDIS_HOST": "redis-1dd891fe-05bb-4930-847c-af64294ee046.cn-east-3.dcs.myhuaweicloud.com",
+          "REDIS_PORT": "6379",
+          "REDIS_PASSWORD": "DDInfraProdP@ss",
+          "TZ": "Asia/Shanghai",
+          "AZURE_OPENAI_API_KEY": "4fd7a6b53efb444e914dcee1339fe778",
+          "VOLCENGINE_API_KEY": "5357d45f-f888-484f-b7ef-3f426f4dcc1a",
+          "HTTP_PROXY": "http://10.34.6.157:3128",
+          "HTTPS_PROXY": "http://10.34.6.157:3128",
+          "http_proxy": "http://10.34.6.157:3128",
+          "https_proxy": "http://10.34.6.157:3128",
+          "NO_PROXY": "localhost,127.0.0.1,172.0.0.0/8,.local,dify-sandbox,.momenta.works,10.0.0.0/8,.deepseek.com,.azure.com,.aliyuncs.com,.volces.com,.ivolces.com,.myhuaweicloud.com,10.251.17.49,10.251.18.82,10.22.5.20,10.251.18.138,.openrouter.ai",
+          "no_proxy": "localhost,127.0.0.1,172.0.0.0/8,.local,dify-sandbox,.momenta.works,10.0.0.0/8,.deepseek.com,.azure.com,.aliyuncs.com,.volces.com,.ivolces.com,.myhuaweicloud.com,10.251.17.49,10.251.18.82,10.22.5.20,10.251.18.138,.openrouter.ai"
+        }
+      },
+      "isBackground": true,
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "showReuseMessage": false
+      },
+      "problemMatcher": {
+        "owner": "litellm-dev",
+        "pattern": {
+          "regexp": ".",
+          "line": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^INFO:\\s+Started",
+          "endsPattern": "^INFO:\\s+Application startup complete\\."
+        }
+      }
+    },
+
+    // ──────────────────────────────────────────────────────────────
+    //  kubectl port-forward — K8s Dev
+    //  将 pep-dev/llm-api-gateway:4000 映射到本地 4001
+    //  context: web-dev-a  namespace: pep-dev
+    // ──────────────────────────────────────────────────────────────
+    {
+      "label": "port-forward: K8s Dev",
+      "type": "shell",
+      "command": "kubectl --context web-dev-a port-forward -n pep-dev svc/llm-api-gateway 4001:4000",
+      "isBackground": true,
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated",
+        "showReuseMessage": false
+      },
+      "problemMatcher": {
+        "owner": "kubectl-pf-dev",
+        "pattern": {
+          "regexp": "^Forwarding from .* -> (\\d+)$",
+          "line": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^Forwarding from 127\\.0\\.0\\.1:4001",
+          "endsPattern": "^Forwarding from \\[::"
+        }
+      }
+    },
+
+    // ──────────────────────────────────────────────────────────────
+    //  kubectl port-forward — K8s Prod
+    //  将 pep-prod/llm-api-gateway:4000 映射到本地 4002
+    //  context: web-a  namespace: pep-prod
+    // ──────────────────────────────────────────────────────────────
+    {
+      "label": "port-forward: K8s Prod",
+      "type": "shell",
+      "command": "kubectl --context web-a port-forward -n pep-prod svc/llm-api-gateway 4002:4000",
+      "isBackground": true,
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated",
+        "showReuseMessage": false
+      },
+      "problemMatcher": {
+        "owner": "kubectl-pf-prod",
+        "pattern": {
+          "regexp": "^Forwarding from .* -> (\\d+)$",
+          "line": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^Forwarding from 127\\.0\\.0\\.1:4002",
+          "endsPattern": "^Forwarding from \\[::"
+        }
+      }
+    }
+  ]
+}
