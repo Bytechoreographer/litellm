@@ -1,0 +1,3 @@
+# 数据 dump 含真实 key/凭据,绝不提交
+litellm_dev_seed.sql
+*.sql

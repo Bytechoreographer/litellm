@@ -11,14 +11,22 @@
 
 VS Code 调试启动配置，包含以下入口：
 
+单个配置(`configurations`):
+
 | 名称 | 说明 |
 |------|------|
-| **Backend: LiteLLM Proxy (Dev)** | 启动本地后端，连接 `litellm_dev` 数据库。启动前自动执行 `check-tag: Dev`，验证当前代码版本与 dev 环境部署版本一致。 |
-| **Backend: LiteLLM Proxy (Prod)** | 启动本地后端，连接 `litellm`（生产）数据库。⚠️ 会写入生产库，谨慎使用。 |
-| **Frontend: Dashboard (local backend)** | 启动 next dev，前端直连 `localhost:4000` 后端。需先手动启动 Backend 配置。 |
-| **Frontend: Dashboard (K8s Dev)** | 启动 next dev，后端走 K8s dev 集群（`pep-dev/llm-api-gateway`），preLaunchTask 自动 port-forward 到 `localhost:4001`。 |
-| **Frontend: Dashboard (K8s Prod)** | 启动 next dev，后端走 K8s prod 集群（`pep-prod/llm-api-gateway`），preLaunchTask 自动 port-forward 到 `localhost:4002`。 |
-| **Frontend: Dashboard (Dev test)** | 启动本地后端（port 4000）+ next dev，前端使用 `NEXT_PUBLIC_USE_REWRITES=true` 模式（next.config.mjs 的 rewrites 代理 API 到后端），避免跨端口的 login redirect / chunk 404 问题。 |
+| **后端(debug,可断点) · 连线上 dev 库 litellm_dev** | 仅起后端(debugpy，可断点)，连线上 `litellm_dev`。preLaunchTask `check-tag: Dev` 校验代码版本与 dev 部署一致。 |
+| **后端(debug,可断点) · 连本地库 localhost(PG+Redis)** | 仅起后端(debugpy，可断点)，连本地 PG+Redis；带 `DISABLE_SCHEMA_UPDATE=true` 跳过迁移(schema 由 db push 管)。⚠️ 需先 `docker compose ... up -d` 且已 db push。 |
+| **前端 · next dev (rewrites, 连本地:4000)** | 仅起 next dev(rewrites 模式)，前端走相对 URL 连本地 :4000。可单独跑(需另起后端)，也被下方 compound 引用。 |
+| ~~后端(debug) · 连线上【生产】库 litellm~~ | 连 `litellm` 生产库,⚠️ 写生产。**已注释停用**(危险，先保留勿删)。 |
+| ~~Frontend: Dashboard (K8s Dev / Prod)~~ | 连线上 K8s 集群的 port-forward 配置，**已注释停用**(太不稳定，先保留勿删)。 |
+
+复合配置(`compounds`，前后端一起、**两个都是真调试进程**):
+
+| 名称 | 说明 |
+|------|------|
+| **▶ 前后端(都可断点) · 后端连线上 dev 库** | 同时起〔后端 debug · 线上 dev 库〕+〔前端〕。后端能断点,前端热更新。 |
+| **▶ 前后端(都可断点) · 后端连本地库** | 同时起〔后端 debug · 本地库〕+〔前端〕。⚠️ 需先 `docker compose -f .local_dev/docker-compose.yml up -d`。 |
 
 环境变量（DATABASE_URL、API Keys、Redis 密码等）全部在 `launch.json` 的 `env` 块中注入，
 不写入 `proxy_config.*.yaml`。
@@ -39,11 +47,12 @@ VS Code task 定义，被 `launch.json` 的 `preLaunchTask` 自动触发，也�
 | Task 标签 | 说明 |
 |-----------|------|
 | **prisma: generate** | 根据 `litellm/proxy/schema.prisma` 生成 Prisma Client，schema 变更后首次启动自动触发。 |
-| **check-tag: Dev / Prod** | 调用 `check-tag.sh`，从 `pep-cd/llm-api-gateway/dev.yaml`（或 `prod.yaml`）读取部署镜像 tag，与本地 HEAD 对比；不一致时中止启动。自动 `git pull pep-cd` 获取最新版本号。 |
-| **ui: build** | `npm run build` 并将产物 `cp` 到 `litellm/proxy/_experimental/out/`，将前端改动打包进后端静态文件。 |
-| **backend: v1.83.7 Dev (port 4000)** | 以 shell task 方式启动本地后端（isBackground），供 "Frontend: Dashboard (Dev test)" 的 preLaunchTask 使用。 |
-| **port-forward: K8s Dev** | `kubectl port-forward pep-dev/llm-api-gateway → localhost:4001`，context: `web-dev-a`。 |
-| **port-forward: K8s Prod** | `kubectl port-forward pep-prod/llm-api-gateway → localhost:4002`，context: `web-a`。 |
+| **check-tag: Dev** | 调用 `check-tag.sh`，从 `pep-cd/llm-api-gateway/dev.yaml` 读取部署镜像 tag，与本地 HEAD 对比；不一致时中止启动。自动 `git pull pep-cd` 获取最新版本号。供 "后端 Dev (debug)" 配置。 |
+| ~~check-tag: Prod~~ | 同上读 `prod.yaml`，**已注释停用**（配套的 Backend Prod 配置已注释）。 |
+| ~~ui: build~~ | `npm run build` 并 `cp` 产物到 `litellm/proxy/_experimental/out/`（把 UI 打进后端静态）。**已注释停用**（当前走 `npm run dev` 热更新，没配置引用它）。 |
+| ~~backend: online dev DB / local DB (port 4000)~~ | 旧的 shell 方式起后端,**已注释停用**——改用 launch.json 的 debugpy 后端配置 + compound(后端可断点),不再需要 shell task。 |
+| **local DB: db push (sync schema)** | 按 `schema.prisma` 同步本地库,补齐后端自带 migrate 漏掉的新列(切到含新列的分支后手动 Run Task 一次)。详见 `.local_dev/README.md`。 |
+| ~~port-forward: K8s Dev / Prod~~ | `kubectl port-forward` 到线上 dev/prod 集群,**已在 tasks.json 注释停用**(太不稳定,先保留勿删)。 |
 
 ---
 

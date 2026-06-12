@@ -45,6 +45,9 @@
       },
       "problemMatcher": []
     },
+    /* ⛔ 停用并保留(勿删):
+       · check-tag: Prod —— Backend Prod 配置已注释,无人引用
+       · ui: build —— 当前走 npm run dev 热更新,没有配置用它把 UI 打进后端静态;需要时再启用
     {
       "label": "check-tag: Prod",
       "type": "shell",
@@ -90,19 +93,22 @@
       },
       "problemMatcher": []
     },
+    */
 
+    /* ⛔ 这两个 shell 后端 task 已停用并保留(勿删):
+       改用 launch.json 的 debugpy 后端配置 + compound 一键起前后端(后端可断点),
+       不再用 shell 方式起后端;env 已迁移到对应 debugpy 配置
     // ──────────────────────────────────────────────────────────────
-    //  LiteLLM 后端 — v1.83.7-stable，本地 port 4000
-    //  配置复用 .vscode/proxy_config.dev.yaml（env 由 launch.json 注入）
-    //  port 4000 = 前端 networking.tsx 的硬编码默认值，无需改代码
-    //  此 task 作为 "Frontend: Dashboard (Dev test)" 的 preLaunchTask 自动触发
+    //  后端 A — 连【线上 dev 库】(华为云 litellm_dev)，本地 port 4000
+    //  端口 4000 = 前端 networking.tsx 默认值；连共享 dev 库，用默认迁移行为
+    //  (如分支比库新缺列，手动应用对应迁移即可，勿让本地随意改共享库 schema)
+    //  作为组合配置 "Dev test (后端连线上 dev 库)" 的 preLaunchTask
     // ──────────────────────────────────────────────────────────────
     {
-      "label": "backend: v1.83.7 Dev (port 4000)",
+      "label": "backend: online dev DB (port 4000)",
       "type": "shell",
       "command": "python3 -m litellm.proxy.proxy_cli --config ${workspaceFolder}/.vscode/proxy_config.dev.yaml --port 4000",
-      "dependsOn": ["prisma: generate",],
-      // "dependsOn": ["ui: build", "prisma: generate"],
+      "dependsOn": ["prisma: generate"],
       "dependsOrder": "sequence",
       "options": {
         "cwd": "${workspaceFolder}",
@@ -146,6 +152,89 @@
       }
     },
 
+    // ──────────────────────────────────────────────────────────────
+    //  后端 B — 连【本地库】(localhost:5432 PG + localhost:6379 Redis)
+    //  纯本地开发；schema 必须用 `prisma db push` 同步(后端自带的 migrate 落后于
+    //  schema.prisma，会漏列如 search_tools/blocked/env_vars)，故启动设
+    //  DISABLE_SCHEMA_UPDATE=true 跳过那套落后的 migrate
+    //  作为组合配置 "Dev test (后端连本地库)" 的 preLaunchTask
+    //  ⚠️ 需先: docker compose -f .local_dev/docker-compose.yml up -d
+    //         且 DATABASE_URL=本地 prisma db push --schema litellm/proxy/schema.prisma
+    // ──────────────────────────────────────────────────────────────
+    {
+      "label": "backend: local DB (port 4000)",
+      "type": "shell",
+      "command": "python3 -m litellm.proxy.proxy_cli --config ${workspaceFolder}/.vscode/proxy_config.dev.yaml --port 4000",
+      "dependsOn": ["prisma: generate"],
+      "dependsOrder": "sequence",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "DATABASE_URL": "postgresql://postgres:dev@localhost:5432/litellm_dev",
+          "DISABLE_SCHEMA_UPDATE": "true",
+          "LITELLM_MASTER_KEY": "sk-VinoeroRitur2KL1MAgm",
+          "LITELLM_SALT_KEY": "sk-oKs",
+          "LITELLM_MODE": "PRODUCTION",
+          "STORE_MODEL_IN_DB": "True",
+          "REDIS_HOST": "localhost",
+          "REDIS_PORT": "6379",
+          "TZ": "Asia/Shanghai",
+          "AZURE_OPENAI_API_KEY": "4fd7a6b53efb444e914dcee1339fe778",
+          "VOLCENGINE_API_KEY": "5357d45f-f888-484f-b7ef-3f426f4dcc1a",
+          "HTTP_PROXY": "http://10.34.6.157:3128",
+          "HTTPS_PROXY": "http://10.34.6.157:3128",
+          "http_proxy": "http://10.34.6.157:3128",
+          "https_proxy": "http://10.34.6.157:3128",
+          "NO_PROXY": "localhost,127.0.0.1,172.0.0.0/8,.local,dify-sandbox,.momenta.works,10.0.0.0/8,.deepseek.com,.azure.com,.aliyuncs.com,.volces.com,.ivolces.com,.myhuaweicloud.com,10.251.17.49,10.251.18.82,10.22.5.20,10.251.18.138,.openrouter.ai",
+          "no_proxy": "localhost,127.0.0.1,172.0.0.0/8,.local,dify-sandbox,.momenta.works,10.0.0.0/8,.deepseek.com,.azure.com,.aliyuncs.com,.volces.com,.ivolces.com,.myhuaweicloud.com,10.251.17.49,10.251.18.82,10.22.5.20,10.251.18.138,.openrouter.ai"
+        }
+      },
+      "isBackground": true,
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "showReuseMessage": false
+      },
+      "problemMatcher": {
+        "owner": "litellm-local",
+        "pattern": {
+          "regexp": ".",
+          "line": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^INFO:\\s+Started",
+          "endsPattern": "^INFO:\\s+Application startup complete\\."
+        }
+      }
+    },
+    */
+
+    // ──────────────────────────────────────────────────────────────
+    //  本地库 schema 同步 — 切到含新列的分支后,手动跑一次(Terminal → Run Task)
+    //  按 schema.prisma 同步本地库,补齐后端自带 migrate 漏掉的新列
+    //  (db push 是 additive,不会删数据;启动仍用 DISABLE_SCHEMA_UPDATE)
+    //  ⚠️ 需本地 PG 在跑: docker compose -f .local_dev/docker-compose.yml up -d
+    // ──────────────────────────────────────────────────────────────
+    {
+      "label": "local DB: db push (sync schema)",
+      "type": "shell",
+      "command": "python3 -m prisma db push --schema ${workspaceFolder}/litellm/proxy/schema.prisma --accept-data-loss --skip-generate",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "DATABASE_URL": "postgresql://postgres:dev@localhost:5432/litellm_dev"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    }
+
+    /* ⛔ 线上 K8s port-forward（dev/prod 集群）暂时停用：太不稳定，先注释保留，勿删
     // ──────────────────────────────────────────────────────────────
     //  kubectl port-forward — K8s Dev
     //  将 pep-dev/llm-api-gateway:4000 映射到本地 4001
@@ -203,5 +292,6 @@
         }
       }
     }
+    */
   ]
 }
