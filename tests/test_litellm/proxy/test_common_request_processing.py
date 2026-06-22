@@ -4114,6 +4114,7 @@ async def test_bill_partial_stream_on_disconnect_skips_when_no_chunks():
 
     response = MagicMock()
     response.chunks = []
+    response._underlying_stream = None
     request_data = {"litellm_logging_obj": logging_obj}
 
     with patch.object(litellm, "stream_chunk_builder", return_value=MagicMock()) as scb:
@@ -4190,3 +4191,86 @@ async def test_bill_partial_stream_on_disconnect_swallows_dispatch_errors():
         )
 
     logging_obj.dispatch_success_handlers.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_bill_partial_stream_on_disconnect_uses_underlying_fallback_chunks():
+    """A Router fallback returns a FallbackStreamWrapper whose own chunks stay empty
+    because its __anext__ delegates instead of recording. The usage-bearing chunks
+    live on the underlying stream, so billing must read those, not the empty wrapper."""
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    logging_obj._on_deferred_stream_complete = None
+
+    underlying = MagicMock()
+    underlying.chunks = ["chunk-1", "chunk-2"]
+    underlying.messages = [{"role": "user", "content": "hi"}]
+
+    response = MagicMock()
+    response.chunks = []  # FallbackStreamWrapper never populates its own chunks
+    response._underlying_stream = underlying
+    request_data = {"litellm_logging_obj": logging_obj}
+
+    partial_response = MagicMock(name="partial_response")
+    with patch.object(
+        litellm, "stream_chunk_builder", return_value=partial_response
+    ) as scb:
+        await ProxyBaseLLMRequestProcessing._bill_partial_stream_on_disconnect(
+            response, request_data
+        )
+
+    assert scb.call_args.kwargs["chunks"] == ["chunk-1", "chunk-2"]
+    assert scb.call_args.kwargs["messages"] == [{"role": "user", "content": "hi"}]
+    logging_obj.dispatch_success_handlers.assert_awaited_once()
+    assert logging_obj.dispatch_success_handlers.call_args.args[0] is partial_response
+
+
+@pytest.mark.asyncio
+async def test_bill_partial_stream_on_disconnect_prefers_wrapper_chunks_when_present():
+    """When the wrapper itself carries chunks, the underlying stream is irrelevant;
+    a non-fallback stream must keep being billed from its own chunks."""
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    logging_obj._on_deferred_stream_complete = None
+
+    underlying = MagicMock()
+    underlying.chunks = ["should-not-be-used"]
+
+    response = MagicMock()
+    response.chunks = ["real-1"]
+    response.messages = [{"role": "user", "content": "hi"}]
+    response._underlying_stream = underlying
+    request_data = {"litellm_logging_obj": logging_obj}
+
+    with patch.object(litellm, "stream_chunk_builder", return_value=MagicMock()) as scb:
+        await ProxyBaseLLMRequestProcessing._bill_partial_stream_on_disconnect(
+            response, request_data
+        )
+
+    assert scb.call_args.kwargs["chunks"] == ["real-1"]
+
+
+@pytest.mark.asyncio
+async def test_bill_partial_stream_on_disconnect_skips_empty_underlying_fallback():
+    """A fallback that never produced a chunk on either stream has nothing to bill."""
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+
+    underlying = MagicMock()
+    underlying.chunks = []
+
+    response = MagicMock()
+    response.chunks = []
+    response._underlying_stream = underlying
+    request_data = {"litellm_logging_obj": logging_obj}
+
+    with patch.object(litellm, "stream_chunk_builder", return_value=MagicMock()) as scb:
+        await ProxyBaseLLMRequestProcessing._bill_partial_stream_on_disconnect(
+            response, request_data
+        )
+
+    scb.assert_not_called()
+    logging_obj.dispatch_success_handlers.assert_not_awaited()

@@ -2484,6 +2484,22 @@ class ProxyBaseLLMRequestProcessing:
                 )
 
     @staticmethod
+    def _resolve_partial_stream_source(response: Any) -> Any:
+        """Return the stream object that holds the usage-bearing chunk history.
+
+        A Router fallback wraps the live stream in a FallbackStreamWrapper whose
+        overridden __anext__ never populates self.chunks, so its own chunks stay
+        empty. The usage-bearing chunks live on the stream it delegates to, tracked
+        as _underlying_stream. Prefer that when the wrapper's own chunks are empty.
+        """
+        if getattr(response, "chunks", None):
+            return response
+        underlying = getattr(response, "_underlying_stream", None)
+        if underlying is not None and getattr(underlying, "chunks", None):
+            return underlying
+        return response
+
+    @staticmethod
     async def _bill_partial_stream_on_disconnect(
         response: Any, request_data: dict
     ) -> None:
@@ -2499,7 +2515,8 @@ class ProxyBaseLLMRequestProcessing:
         normal completion already logged.
         """
         logging_obj = request_data.get("litellm_logging_obj")
-        chunks = getattr(response, "chunks", None)
+        source = ProxyBaseLLMRequestProcessing._resolve_partial_stream_source(response)
+        chunks = getattr(source, "chunks", None)
         if logging_obj is None or not chunks:
             return
         # Optimization, not a correctness guard: dispatch_success_handlers is the
@@ -2510,7 +2527,7 @@ class ProxyBaseLLMRequestProcessing:
         try:
             partial_response = litellm.stream_chunk_builder(
                 chunks=chunks,
-                messages=getattr(response, "messages", None),
+                messages=getattr(source, "messages", None),
                 logging_obj=logging_obj,
             )
         except Exception:

@@ -2188,6 +2188,12 @@ class Router:
                     logging_obj=model_response.logging_obj,
                 )
                 self._async_generator = async_generator
+                # __anext__ below delegates straight to the generator, so the
+                # inherited CustomStreamWrapper.__anext__ that records usage-bearing
+                # chunks into self.chunks never runs on this instance. Keep a
+                # reference to the stream that does accumulate them so partial-usage
+                # billing on a client disconnect can read the real chunk history.
+                self._underlying_stream: CustomStreamWrapper = model_response
                 # Preserve hidden params (including litellm_overhead_time_ms) from original response
                 if hasattr(model_response, "_hidden_params"):
                     self._hidden_params = model_response._hidden_params.copy()
@@ -2197,6 +2203,9 @@ class Router:
 
             async def __anext__(self):
                 return await self._async_generator.__anext__()
+
+            def set_underlying_stream(self, stream: CustomStreamWrapper) -> None:
+                self._underlying_stream = stream
 
         async def stream_with_fallbacks():
             fallback_response = None  # Track for cleanup in finally
@@ -2262,6 +2271,8 @@ class Router:
 
                     # If fallback returns a streaming response, iterate over it
                     if hasattr(fallback_response, "__aiter__"):
+                        if isinstance(fallback_response, CustomStreamWrapper):
+                            fallback_wrapper.set_underlying_stream(fallback_response)
                         async for fallback_item in fallback_response:  # type: ignore
                             if (
                                 fallback_item
@@ -2307,7 +2318,8 @@ class Router:
                                 e,
                             )
 
-        return FallbackStreamWrapper(stream_with_fallbacks())
+        fallback_wrapper = FallbackStreamWrapper(stream_with_fallbacks())
+        return fallback_wrapper
 
     @staticmethod
     def _extract_partial_responses_usage(

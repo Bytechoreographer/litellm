@@ -19,7 +19,6 @@ from litellm.llms.custom_httpx.aiohttp_transport import (
     LiteLLMAiohttpTransport,
 )
 
-
 # ── aiohttp transport layer tests ──────────────────────────────
 
 
@@ -391,3 +390,147 @@ async def test_stream_with_fallbacks_closes_both_on_fallback_disconnect():
 
     assert model_closed, "model_response stream was not closed"
     assert fallback_closed, "fallback_response stream was not closed"
+
+
+@pytest.mark.asyncio
+async def test_fallback_stream_wrapper_exposes_underlying_model_response():
+    """FallbackStreamWrapper.__anext__ delegates instead of recording chunks, so its
+    own self.chunks stays empty. It must expose the stream that does accumulate them
+    as _underlying_stream so partial-usage billing on a client disconnect can find the
+    real chunk history."""
+    from litellm.router import Router
+
+    class FakeStream(CustomStreamWrapper):
+        def __init__(self):
+            super().__init__(
+                completion_stream=None,
+                model="test-model",
+                logging_obj=MagicMock(),
+                custom_llm_provider="openai",
+            )
+            self._items = ["chunk1", "chunk2"]
+            self._index = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._index >= len(self._items):
+                raise StopAsyncIteration
+            item = self._items[self._index]
+            self._index += 1
+            self.chunks.append(item)
+            return item
+
+        async def aclose(self):
+            pass
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/test", "api_key": "fake"},
+            }
+        ]
+    )
+
+    fake_stream = FakeStream()
+    result = await router._acompletion_streaming_iterator(
+        model_response=fake_stream,
+        messages=[{"role": "user", "content": "hi"}],
+        initial_kwargs={"model": "test-model"},
+    )
+
+    async for _ in result:
+        break
+
+    assert result.chunks == [], "wrapper must not record chunks on its own instance"
+    assert result._underlying_stream is fake_stream
+    assert result._underlying_stream.chunks == ["chunk1"]
+
+
+@pytest.mark.asyncio
+async def test_fallback_stream_wrapper_repoints_underlying_on_midstream_switch():
+    """On a mid-stream fallback switch the post-switch chunks accumulate on the
+    fallback stream, so _underlying_stream must repoint to it for billing to find
+    the chunks produced after the switch."""
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.router import Router
+
+    class FakeModelStream(CustomStreamWrapper):
+        def __init__(self):
+            super().__init__(
+                completion_stream=None,
+                model="test-model",
+                logging_obj=MagicMock(),
+                custom_llm_provider="openai",
+            )
+            self.chunks = []
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise MidStreamFallbackError(
+                message="test mid-stream error",
+                model="test-model",
+                llm_provider="openai",
+                generated_content="",
+            )
+
+        async def aclose(self):
+            pass
+
+    class FakeFallbackStream(CustomStreamWrapper):
+        def __init__(self):
+            super().__init__(
+                completion_stream=None,
+                model="fallback-model",
+                logging_obj=MagicMock(),
+                custom_llm_provider="openai",
+            )
+            self._items = ["fb1", "fb2"]
+            self._index = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._index >= len(self._items):
+                raise StopAsyncIteration
+            item = self._items[self._index]
+            self._index += 1
+            self.chunks.append(item)
+            return item
+
+        async def aclose(self):
+            pass
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/test", "api_key": "fake"},
+            }
+        ]
+    )
+
+    fake_model_stream = FakeModelStream()
+    fake_fallback_stream = FakeFallbackStream()
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=fake_fallback_stream,
+    ):
+        result = await router._acompletion_streaming_iterator(
+            model_response=fake_model_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            initial_kwargs={"model": "test-model", "fallbacks": ["other-model"]},
+        )
+
+        async for _ in result:
+            break
+
+    assert result._underlying_stream is fake_fallback_stream
+    assert result._underlying_stream.chunks == ["fb1"]
