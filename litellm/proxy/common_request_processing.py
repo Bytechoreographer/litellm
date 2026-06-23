@@ -2469,6 +2469,32 @@ class ProxyBaseLLMRequestProcessing:
                 )
             if recorded_client_disconnect:
                 ProxyLogging._fire_deferred_stream_logging(request_data)
+                # Record the partial spend for the tokens the provider already
+                # billed. #31035 added _record_partial_usage_for_failure which
+                # stashes partial usage + cost on the logging object; fire the
+                # failure handler afterwards so the row is written to SpendLogs.
+                # The timeout/exception path does this inside CSW.__anext__;
+                # replicate here for the disconnect path (CancelledError /
+                # GeneratorExit bypasses that handler).
+                logging_obj = request_data.get("litellm_logging_obj")
+                if (
+                    logging_obj is not None
+                    and hasattr(response, "_record_partial_usage_for_failure")
+                    and getattr(response, "chunks", None)
+                    and not logging_obj.model_call_details.get(
+                        "has_dispatched_final_stream_success"
+                    )
+                ):
+                    try:
+                        response._record_partial_usage_for_failure()
+                        await logging_obj.async_failure_handler(
+                            Exception("Client disconnected mid-stream"),
+                            "Client disconnected mid-stream",
+                        )
+                    except Exception:
+                        verbose_proxy_logger.exception(
+                            "Failed to record partial spend on client disconnect"
+                        )
 
             if hasattr(response, "aclose"):
                 try:
