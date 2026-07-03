@@ -820,15 +820,19 @@ def test_custom_pricing_cost_calc_uses_router_model_id_from_litellm_metadata():
     assert selected_model is not None
     assert custom_model_id in selected_model
 
-    # Without custom_pricing, the router_model_id is NOT selected
+    # A priced router_model_id entry is authoritative even when custom_pricing
+    # is False: the flag is derived separately from request-time metadata and
+    # can be False for a correctly-priced deployment. (Previously the router_model_id
+    # was gated behind custom_pricing=True, which under-billed passthrough
+    # deployments whose price lived only under the model_id key.)
     selected_model_no_custom = _select_model_name_for_cost_calc(
         model="anthropic/claude-sonnet-4-20250514",
         completion_response=None,
         custom_pricing=False,
         custom_llm_provider="anthropic",
-        router_model_id=custom_model_id,
+        router_model_id=custom_model_id,  # registered WITH pricing above
     )
-    assert custom_model_id not in (selected_model_no_custom or "")
+    assert custom_model_id in (selected_model_no_custom or "")
 
 
 def test_per_request_custom_pricing_with_router():
@@ -3176,3 +3180,114 @@ def test_completion_cost_logs_reasoning_and_cache_breakdown():
     assert logging_obj.cost_breakdown is not None
     assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(3114 * 2.5e-06)
     assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(100 * 3e-08)
+
+
+def test_registered_router_model_id_prices_unmapped_passthrough_with_cache():
+    """A passthrough deployment (custom_llm_provider="anthropic") whose model is
+    NOT in litellm.model_cost must be priced from the deployment's configured
+    price once it is registered under the router model_id, instead of resolving
+    to 0 / raising "model isn't mapped yet". Cache-read tokens must be billed at
+    the configured cache rate (not the full input rate), matching the standard
+    (mapped-model) cost path -- confirming the fix routes through the same
+    generic_cost_per_token logic rather than a parallel helper that double-counts
+    cache tokens for Anthropic-style usage (where prompt_tokens already includes
+    cache tokens)."""
+    from litellm.cost_calculator import cost_per_token
+
+    model_id = "router-uuid-minimax-cache-test"
+    litellm.register_model(
+        model_cost={
+            model_id: {
+                "input_cost_per_token": 3e-7,
+                "output_cost_per_token": 1.2e-6,
+                "cache_read_input_token_cost": 6e-8,
+                "cache_creation_input_token_cost": 3.75e-7,
+                "litellm_provider": "anthropic",
+                "mode": "chat",
+            }
+        }
+    )
+    # Anthropic-style usage: prompt_tokens already folded in cache_read (353+114).
+    usage = Usage(
+        prompt_tokens=467,
+        completion_tokens=12,
+        total_tokens=479,
+        cache_read_input_tokens=114,
+        cache_creation_input_tokens=0,
+    )
+    prompt_cost, completion_cost = cost_per_token(
+        model=model_id,  # what _select_model_name_for_cost_calc selects post-fix
+        custom_llm_provider="anthropic",
+        prompt_tokens=467,
+        completion_tokens=12,
+        usage_object=usage,
+    )
+    # 353 regular @ 3e-7 + 114 cache_read @ 6e-8 + 12 output @ 1.2e-6
+    expected = (467 - 114) * 3e-7 + 114 * 6e-8 + 12 * 1.2e-6
+    assert abs((prompt_cost + completion_cost) - expected) < 1e-10
+    # cache priced below the full input rate; billing it at 3e-7 overcharges
+    assert (prompt_cost + completion_cost) < 467 * 3e-7 + 12 * 1.2e-6
+
+
+def test_get_custom_pricing_for_model_extracts_from_all_locations():
+    """get_custom_pricing_for_model finds the configured price whether it lives
+    at litellm_params top-level or under (litellm_)metadata.model_info, including
+    cache rates."""
+    from litellm.litellm_core_utils.litellm_logging import get_custom_pricing_for_model
+
+    assert get_custom_pricing_for_model(None) is None
+    assert get_custom_pricing_for_model({"model": "x"}) is None
+    assert get_custom_pricing_for_model({"input_cost_per_token": 3e-7}) == {
+        "input_cost_per_token": 3e-7
+    }
+    assert get_custom_pricing_for_model(
+        {"metadata": {"model_info": {"input_cost_per_token": 3e-7, "id": "uuid"}}}
+    ) == {"input_cost_per_token": 3e-7}
+    assert get_custom_pricing_for_model(
+        {
+            "litellm_metadata": {
+                "model_info": {
+                    "output_cost_per_token": 1.2e-6,
+                    "cache_read_input_token_cost": 6e-8,
+                }
+            }
+        }
+    ) == {"output_cost_per_token": 1.2e-6, "cache_read_input_token_cost": 6e-8}
+
+
+def test_select_model_name_uses_priced_router_model_id_even_when_custom_pricing_false():
+    """A priced router_model_id entry is authoritative for cost calc even when
+    the custom_pricing flag is False (it is derived separately from request-time
+    metadata and can be False for a correctly-priced deployment). An unpriced
+    router_model_id entry is not selected, so per-request pricing that lives on
+    the model name is unaffected."""
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    priced_id = "router-uuid-priced"
+    litellm.register_model(
+        model_cost={priced_id: {"input_cost_per_token": 3e-7, "litellm_provider": "anthropic"}}
+    )
+    # _select_model_name_for_cost_calc may prefix the provider (anthropic/<id>)
+    assert priced_id in (
+        _select_model_name_for_cost_calc(
+            model="anthropic/minimax-m3",
+            completion_response=None,
+            custom_pricing=False,
+            custom_llm_provider="anthropic",
+            router_model_id=priced_id,
+        )
+        or ""
+    )
+
+    unpriced_id = "router-uuid-unpriced"
+    litellm.register_model(model_cost={unpriced_id: {"litellm_provider": "anthropic"}})
+    assert unpriced_id not in (
+        _select_model_name_for_cost_calc(
+            model="anthropic/minimax-m3",
+            completion_response=None,
+            custom_pricing=False,
+            custom_llm_provider="anthropic",
+            router_model_id=unpriced_id,
+        )
+        or ""
+    )

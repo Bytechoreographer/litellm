@@ -1407,9 +1407,24 @@ class Logging(LiteLLMLoggingBaseClass):
             router_model_id = self.get_router_model_id()
 
         ## RESPONSE COST ##
-        custom_pricing = use_custom_pricing_for_model(
-            litellm_params=(self.litellm_params if hasattr(self, "litellm_params") else None)
-        )
+        _litellm_params = self.litellm_params if hasattr(self, "litellm_params") else None
+        custom_pricing = use_custom_pricing_for_model(litellm_params=_litellm_params)
+
+        # A deployment's configured price is registered in litellm.model_cost
+        # only under its UUID model_id key by the router, and that entry is not
+        # reliably present at cost-calc time -- absent for passthrough models
+        # not in the built-in map (e.g. custom_llm_provider="anthropic", model
+        # "minimax-m3"), whose cost then resolves to 0. Register the configured
+        # price under router_model_id so _select_model_name_for_cost_calc selects
+        # it and the standard cost path prices the request, cache tokens
+        # included, exactly like a mapped model.
+        if custom_pricing and router_model_id is not None:
+            _custom_pricing = get_custom_pricing_for_model(_litellm_params)
+            if _custom_pricing is not None and (
+                litellm.model_cost.get(router_model_id, {}).get("input_cost_per_token")
+                is None
+            ):
+                litellm.register_model({router_model_id: _custom_pricing})
 
         prompt = ""  # use for tts cost calc
         _input = self.model_call_details.get("input", None)
@@ -4442,6 +4457,35 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
                     return True
 
     return False
+
+
+def get_custom_pricing_for_model(litellm_params: Optional[dict]) -> Optional[dict]:
+    """Return the deployment's configured custom pricing fields, or None.
+
+    Mirrors use_custom_pricing_for_model's search order (litellm_params
+    top-level, then model_info under metadata / litellm_metadata) and returns
+    the first location carrying any custom-pricing key (including cache-read /
+    cache-creation rates). Used to register a passthrough deployment's price
+    into litellm.model_cost so the standard cost path prices it -- including
+    cache tokens -- instead of resolving to 0.
+    """
+    if litellm_params is None:
+        return None
+    sources: List[dict] = [litellm_params]
+    for metadata_key in ("metadata", "litellm_metadata"):
+        metadata = litellm_params.get(metadata_key, {}) or {}
+        model_info = metadata.get("model_info", {}) or {}
+        if model_info:
+            sources.append(model_info)
+    for source in sources:
+        matching_keys = _CUSTOM_PRICING_KEYS & source.keys()
+        if any(source.get(key) is not None for key in matching_keys):
+            return {
+                key: source[key]
+                for key in matching_keys
+                if source.get(key) is not None
+            }
+    return None
 
 
 def is_valid_sha256_hash(value: str) -> bool:
