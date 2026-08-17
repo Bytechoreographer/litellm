@@ -508,9 +508,17 @@ class Logging(LiteLLMLoggingBaseClass):
     def get_router_model_id(self) -> str | None:
         """Extract the router deployment model_id from litellm_params.
 
-        Checks both litellm_metadata and metadata for model_info.id.
-        Used by cost calculators to look up custom pricing registered
-        under the deployment's model_info.id in litellm.model_cost.
+        Checks model_info under litellm_metadata and metadata, then the
+        top-level model_info block that UI / DB deployments carry. Used by cost
+        calculators to look up custom pricing registered under the deployment's
+        model_info.id in litellm.model_cost.
+
+        The top-level fallback is what prices a streamed request: the response
+        assembled from chunks carries no _hidden_params["model_id"], so this is
+        the only place the cost path can recover the deployment id. Without it a
+        deployment whose id and price live solely in top-level model_info falls
+        back to the requested model-group name, which is not a key in
+        litellm.model_cost, and the request bills 0.
         """
         if not hasattr(self, "litellm_params"):
             return None
@@ -520,7 +528,7 @@ class Logging(LiteLLMLoggingBaseClass):
             model_id = info.get("id")
             if model_id is not None:
                 return model_id
-        return None
+        return (self.litellm_params.get("model_info", {}) or {}).get("id")
 
     def update_environment_variables(
         self,
@@ -4466,58 +4474,52 @@ def _get_custom_logger_settings_from_proxy_server(callback_name: str) -> dict:
     return {}
 
 
-def use_custom_pricing_for_model(litellm_params: dict | None) -> bool:
+def _custom_pricing_sources(litellm_params: Optional[dict]) -> tuple[dict, ...]:
+    """Ordered locations a deployment's custom pricing may live in.
+
+    A deployment configured via the UI / DB stores its per-token pricing under
+    the top-level ``model_info`` block, while generic_api_call routes
+    (/responses, /messages) nest it under ``metadata`` / ``litellm_metadata``
+    ``model_info``, and some callers spell the fields directly on
+    ``litellm_params``. All are searched so a priced deployment is detected
+    regardless of which surface produced its params.
+    """
+    if litellm_params is None:
+        return ()
+    nested = (
+        litellm_params.get("model_info") or {},
+        (litellm_params.get("metadata") or {}).get("model_info") or {},
+        (litellm_params.get("litellm_metadata") or {}).get("model_info") or {},
+    )
+    return (litellm_params, *(source for source in nested if source))
+
+
+def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
     """
     Check if the model uses custom pricing
 
-    Returns True if any of `SPECIAL_MODEL_INFO_PARAMS` are present in `litellm_params` or `model_info`
+    Returns True if any custom-pricing key carries a value in any of the
+    locations searched by `_custom_pricing_sources`.
     """
-    if litellm_params is None:
-        return False
-
-    # Check litellm_params using set intersection (only check keys that exist in both)
-    matching_keys = _CUSTOM_PRICING_KEYS & litellm_params.keys()
-    for key in matching_keys:
-        if litellm_params.get(key) is not None:
-            return True
-
-    # Check model_info from metadata or litellm_metadata (generic_api_call routes
-    # like /responses and /messages store model_info under litellm_metadata)
-    for metadata_key in ("metadata", "litellm_metadata"):
-        metadata: dict = litellm_params.get(metadata_key, {}) or {}
-        model_info: dict = metadata.get("model_info", {}) or {}
-
-        if model_info:
-            matching_keys = _CUSTOM_PRICING_KEYS & model_info.keys()
-            for key in matching_keys:
-                if model_info.get(key) is not None:
-                    return True
-
-    return False
+    return get_custom_pricing_for_model(litellm_params) is not None
 
 
 def get_custom_pricing_for_model(litellm_params: Optional[dict]) -> Optional[dict]:
     """Return the deployment's configured custom pricing fields, or None.
 
-    Mirrors use_custom_pricing_for_model's search order (litellm_params
-    top-level, then model_info under metadata / litellm_metadata) and returns
-    the first location carrying any custom-pricing key (including cache-read /
-    cache-creation rates). Used to register a passthrough deployment's price
-    into litellm.model_cost so the standard cost path prices it -- including
-    cache tokens -- instead of resolving to 0.
+    Searches every location in `_custom_pricing_sources` (top-level
+    ``litellm_params``, its ``model_info`` block, and ``model_info`` nested
+    under ``metadata`` / ``litellm_metadata``) and returns the first one
+    carrying any custom-pricing key (including cache-read / cache-creation
+    rates). Used to register a deployment's price into litellm.model_cost so
+    the standard cost path prices it -- including cache tokens -- instead of
+    resolving to 0.
     """
-    if litellm_params is None:
-        return None
-    sources: List[dict] = [litellm_params]
-    for metadata_key in ("metadata", "litellm_metadata"):
-        metadata = litellm_params.get(metadata_key, {}) or {}
-        model_info = metadata.get("model_info", {}) or {}
-        if model_info:
-            sources.append(model_info)
-    for source in sources:
+    for source in _custom_pricing_sources(litellm_params):
         matching_keys = _CUSTOM_PRICING_KEYS & source.keys()
-        if any(source.get(key) is not None for key in matching_keys):
-            return {key: source[key] for key in matching_keys if source.get(key) is not None}
+        priced = {key: source[key] for key in matching_keys if source.get(key) is not None}
+        if priced:
+            return priced
     return None
 
 

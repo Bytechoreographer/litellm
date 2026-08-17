@@ -203,6 +203,121 @@ def test_use_custom_pricing_not_detected_litellm_metadata_no_pricing():
     assert use_custom_pricing_for_model(litellm_params) is False
 
 
+def test_custom_pricing_detected_in_top_level_model_info():
+    """Pricing under litellm_params["model_info"] (top-level) must be detected.
+
+    UI / DB deployments store per-token pricing on the top-level model_info
+    block, not under metadata / litellm_metadata and not spelled directly on
+    litellm_params. Before this was searched, a priced third-party
+    anthropic-compatible deployment whose model_id was missing from
+    litellm.model_cost fell back to the pricing-stripped provider alias and
+    billed spend=0. Regression test: both detection and extraction must see
+    the top-level model_info price, including cache-read/creation rates.
+    """
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_custom_pricing_for_model,
+        use_custom_pricing_for_model,
+    )
+
+    litellm_params = {
+        "custom_llm_provider": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "model_info": {
+            "id": "50fe6aec-0ed7-40ae-b134-4ef2dbe064ec",
+            "mode": "chat",
+            "input_cost_per_token": 1.5e-06,
+            "output_cost_per_token": 7.5e-06,
+            "cache_read_input_token_cost": 1.5e-07,
+            "cache_creation_input_token_cost": 1.875e-06,
+        },
+    }
+
+    assert use_custom_pricing_for_model(litellm_params) is True
+    assert get_custom_pricing_for_model(litellm_params) == {
+        "input_cost_per_token": 1.5e-06,
+        "output_cost_per_token": 7.5e-06,
+        "cache_read_input_token_cost": 1.5e-07,
+        "cache_creation_input_token_cost": 1.875e-06,
+    }
+
+
+def test_custom_pricing_not_detected_top_level_model_info_no_pricing():
+    """A deployment with a top-level model_info carrying no priced key must not
+    be treated as custom-priced, so the cost path falls back to the built-in
+    (official) model map instead of registering a bogus entry."""
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_custom_pricing_for_model,
+        use_custom_pricing_for_model,
+    )
+
+    litellm_params = {
+        "custom_llm_provider": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "model_info": {
+            "id": "50fe6aec-0ed7-40ae-b134-4ef2dbe064ec",
+            "mode": "chat",
+            "max_tokens": 64000,
+            "input_cost_per_token": None,
+        },
+    }
+
+    assert use_custom_pricing_for_model(litellm_params) is False
+    assert get_custom_pricing_for_model(litellm_params) is None
+
+
+def test_router_model_id_found_in_top_level_model_info():
+    """get_router_model_id must find the deployment id in top-level model_info.
+
+    A streamed response is assembled from chunks and carries no
+    _hidden_params["model_id"], so get_router_model_id is the only way the cost
+    path recovers the deployment. UI / DB deployments keep both the id and the
+    price on the top-level model_info block, which this used to skip: cost then
+    fell back to the requested model-group name (e.g. "claude-haiku-4.5", not a
+    key in litellm.model_cost) and the request billed 0. Existing
+    litellm_metadata / metadata precedence must be preserved.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    def _logging_obj(litellm_params: dict) -> Logging:
+        obj = Logging(
+            model="claude-haiku-4-5",
+            messages=[],
+            stream=True,
+            call_type="acompletion",
+            start_time=datetime.now(),
+            litellm_call_id="router-model-id-test",
+            function_id="router-model-id-test",
+        )
+        obj.litellm_params = litellm_params
+        return obj
+
+    top_level_only = {
+        "model": "claude-haiku-4-5",
+        "custom_llm_provider": "anthropic",
+        "model_info": {"id": "6a868e3e-d64d-4045-984a-796bfa7988a8", "input_cost_per_token": 1e-06},
+    }
+    assert _logging_obj(top_level_only).get_router_model_id() == "6a868e3e-d64d-4045-984a-796bfa7988a8"
+
+    # litellm_metadata still wins over the top-level block
+    both = {
+        "model_info": {"id": "top-level-id"},
+        "litellm_metadata": {"model_info": {"id": "litellm-metadata-id"}},
+    }
+    assert _logging_obj(both).get_router_model_id() == "litellm-metadata-id"
+
+    # metadata still wins over the top-level block
+    meta_and_top = {
+        "model_info": {"id": "top-level-id"},
+        "metadata": {"model_info": {"id": "metadata-id"}},
+    }
+    assert _logging_obj(meta_and_top).get_router_model_id() == "metadata-id"
+
+    # no id anywhere stays None, so unpriced deployments are unaffected
+    assert _logging_obj({"model": "claude-haiku-4-5"}).get_router_model_id() is None
+
+
 def test_response_cost_calculator_uses_router_model_id_from_litellm_metadata():
     """_response_cost_calculator should extract router_model_id from
     litellm_params.litellm_metadata.model_info.id when the result object
