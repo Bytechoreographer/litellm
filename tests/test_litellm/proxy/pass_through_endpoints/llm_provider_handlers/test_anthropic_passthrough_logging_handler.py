@@ -622,6 +622,36 @@ class TestAzureAnthropicCostCalculation:
         assert "response_cost" in kwargs
         assert kwargs["response_cost"] > 0
 
+    @patch("litellm.completion_cost")
+    def test_cost_calculation_forwards_litellm_logging_obj(self, mock_completion_cost):
+        """Regression: /v1/messages streaming cost must pass litellm_logging_obj
+        to completion_cost so _store_cost_breakdown_in_logging_obj runs and the
+        spend log row carries a non-null cost_breakdown. Without it, Claude Code
+        (anthropic_messages) requests log cost_breakdown=null while
+        /v1/chat/completions (acompletion) logs it correctly."""
+        from litellm.types.utils import ModelResponse
+
+        mock_completion_cost.return_value = 0.001
+
+        logging_obj = self._create_mock_logging_obj(model="claude-3-7-sonnet-20250219")
+
+        mock_response = MagicMock(spec=ModelResponse)
+        mock_response.id = "test-id"
+        mock_response.model = "claude-3-7-sonnet-20250219"
+
+        AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=mock_response,
+            model="claude-3-7-sonnet-20250219",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        mock_completion_cost.assert_called_once()
+        call_kwargs = mock_completion_cost.call_args[1]
+        assert call_kwargs["litellm_logging_obj"] is logging_obj
+
 
 class TestAnthropicBatchPassthroughCostTracking:
     """Test cases for Anthropic batch passthrough cost tracking functionality"""

@@ -3228,7 +3228,7 @@ class Logging(LiteLLMLoggingBaseClass):
         import httpx
 
         if self.stream and isinstance(result, ModelResponse) or isinstance(result, ModelResponse):
-            return result
+            return self._backfill_anthropic_messages_model(result)
 
         if isinstance(
             result,
@@ -3268,6 +3268,17 @@ class Logging(LiteLLMLoggingBaseClass):
                 model_response=litellm.ModelResponse(),
                 json_mode=None,
             )
+        return self._backfill_anthropic_messages_model(result)
+
+    def _backfill_anthropic_messages_model(self, result: Any) -> Any:
+        """Some Anthropic-compatible backends return ``model: null`` in the
+        response. The cost calculator's model_map lookup and downstream
+        spend_logs columns key off ``response.model``, so a null model yields
+        an empty ``model_map_key`` and a null ``model_map_value``. Backfill it
+        from the logging object's model (the requested deployment name) when
+        the provider omitted it, mirroring what the OpenAI adapter does."""
+        if isinstance(result, ModelResponse) and not getattr(result, "model", None):
+            result.model = self.model
         return result
 
     def _translate_responses_api_response_to_model_response(self, result: ResponsesAPIResponse) -> ModelResponse:
@@ -4750,12 +4761,14 @@ class StandardLoggingPayloadSetup:
         custom_llm_provider: str | None,
         init_response_obj: Any | BaseModel | dict,
         api_base: str | None = None,
+        router_model_id: str | None = None,
     ) -> StandardLoggingModelInformation:
         model_cost_name = _select_model_name_for_cost_calc(
             model=base_model if custom_pricing else None,
             completion_response=init_response_obj,  # type: ignore
             base_model=base_model,
             custom_pricing=custom_pricing,
+            router_model_id=router_model_id,
         )
         if model_cost_name is None:
             model_cost_information = StandardLoggingModelInformation(model_map_key="", model_map_value=None)
@@ -5326,6 +5339,7 @@ def get_standard_logging_object_payload(
             custom_llm_provider=kwargs.get("custom_llm_provider"),
             init_response_obj=init_response_obj,
             api_base=litellm_params.get("api_base"),
+            router_model_id=logging_obj.get_router_model_id(),
         )
 
         error_information, error_str = StandardLoggingPayloadSetup.get_error_information_for_logging_payload(

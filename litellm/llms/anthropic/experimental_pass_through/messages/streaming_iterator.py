@@ -1,4 +1,3 @@
-import asyncio
 import json
 from collections.abc import AsyncIterator
 from datetime import datetime
@@ -124,6 +123,7 @@ class BaseAnthropicMessagesStreamingIterator:
 
     async def _handle_streaming_logging(self, collected_chunks: list[bytes]):
         """Handle the logging after all chunks have been collected."""
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
         from litellm.proxy.pass_through_endpoints.streaming_handler import (
             PassThroughStreamingHandler,
         )
@@ -134,8 +134,14 @@ class BaseAnthropicMessagesStreamingIterator:
         if self.completion_start_time is not None:
             self.litellm_logging_obj.completion_start_time = self.completion_start_time
             self.litellm_logging_obj.model_call_details["completion_start_time"] = self.completion_start_time
-        asyncio.create_task(
-            PassThroughStreamingHandler._route_streaming_logging_to_handler(
+        # Schedule via the durable logging worker instead of a bare
+        # asyncio.create_task: the event loop only holds a weak reference to
+        # fire-and-forget tasks, so under GC/load the spend-logging coroutine
+        # can be collected before it writes the SpendLogs row, leaving the
+        # /v1/messages streaming response unbilled (spend=0, cost_breakdown
+        # null). The worker holds a strong reference and drains on shutdown.
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+            async_coroutine=PassThroughStreamingHandler._route_streaming_logging_to_handler(
                 litellm_logging_obj=self.litellm_logging_obj,
                 passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
                 url_route="/v1/messages",

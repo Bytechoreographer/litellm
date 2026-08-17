@@ -1,7 +1,9 @@
+import asyncio
 import json
 import os
 import sys
 from datetime import datetime
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -243,3 +245,38 @@ def test_incomplete_stream_error_sse_event_is_valid_anthropic_error():
         "error": {"type": "api_error", "message": INCOMPLETE_STREAM_ERROR_MESSAGE},
     }
     assert event.endswith("\n\n")
+
+
+class TestHandleStreamingLoggingScheduling:
+    """Regression: the /v1/messages streaming spend-logging coroutine must be
+    enqueued on the durable GLOBAL_LOGGING_WORKER, not scheduled with a bare
+    asyncio.create_task. A bare create_task is only weakly referenced by the
+    event loop and can be GC'd before it writes the SpendLogs row, which left
+    Claude Code (anthropic_messages) requests unbilled (spend=0,
+    cost_breakdown=null) while /v1/chat/completions billed correctly.
+    """
+
+    def _make_iterator(self):
+        logging_obj = MagicMock()
+        logging_obj.completion_start_time = None
+        logging_obj.model_call_details = {}
+        return BaseAnthropicMessagesStreamingIterator(
+            litellm_logging_obj=logging_obj,
+            request_body={"model": "deepseek-v4-flash"},
+        )
+
+    @patch(
+        "litellm.proxy.pass_through_endpoints.streaming_handler.PassThroughStreamingHandler._route_streaming_logging_to_handler"
+    )
+    def test_spend_logging_enqueued_on_durable_worker(self, mock_route):
+        mock_route.return_value = asyncio.sleep(0)
+
+        iterator = self._make_iterator()
+        with patch(
+            "litellm.litellm_core_utils.logging_worker.GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue"
+        ) as mock_enqueue:
+            asyncio.run(iterator._handle_streaming_logging(collected_chunks=[b"event: message_stop\n"]))
+
+        assert mock_enqueue.called, (
+            "spend logging must be enqueued on GLOBAL_LOGGING_WORKER so it is not GC'd before writing the SpendLogs row"
+        )

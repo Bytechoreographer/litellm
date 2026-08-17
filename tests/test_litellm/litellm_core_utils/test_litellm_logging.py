@@ -4153,3 +4153,60 @@ def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
     logging_obj.post_call(original_response='{"ok": true}', input=big_input, api_key="sk-test")
 
     assert litellm.error_logs == {}
+def test_get_model_cost_information_forwards_router_model_id():
+    """Regression: custom-priced DB models are registered in litellm.model_cost
+    under model_info.id, not under their name. get_model_cost_information must
+    forward router_model_id to _select_model_name_for_cost_calc so the spend
+    log's model_map_information resolves to the deployment's cost entry instead
+    of defaulting to model_map_key="" / model_map_value=None."""
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.types.utils import ModelResponse
+
+    deployment_id = "test-deployment-id-for-router-model-id-forwarding"
+    litellm.register_model(
+        {
+            deployment_id: {
+                "litellm_provider": "anthropic",
+                "mode": "chat",
+                "input_cost_per_token": 1.5e-7,
+                "output_cost_per_token": 3e-7,
+            }
+        }
+    )
+    try:
+        # Provider returned model=null (Anthropic-compatible backend omitting it);
+        # without router_model_id forwarding this yields model_map_key="".
+        response = ModelResponse(id="r1", model=None, created=0)
+
+        info = StandardLoggingPayloadSetup.get_model_cost_information(
+            base_model=None,
+            custom_pricing=True,
+            custom_llm_provider="anthropic",
+            init_response_obj=response,
+            router_model_id=deployment_id,
+        )
+        assert info["model_map_key"] == deployment_id
+        assert info["model_map_value"] is not None
+        assert info["model_map_value"]["input_cost_per_token"] == 1.5e-7
+    finally:
+        litellm.model_cost.pop(deployment_id, None)
+
+
+def test_backfill_anthropic_messages_model_from_self_when_provider_omits_it(logging_obj):
+    """Regression: some Anthropic-compatible backends return model=null in the
+    response. The logged ModelResponse must backfill model from the logging
+    object's model so downstream cost/model_map lookups key off a real name
+    instead of null (which produced model_map_key="" and spend=0)."""
+    from litellm.types.utils import ModelResponse
+
+    logging_obj.model = "deepseek-v4-flash"
+
+    null_model_response = ModelResponse(id="r1", model=None, created=0)
+    backfilled = logging_obj._backfill_anthropic_messages_model(null_model_response)
+    assert backfilled.model == "deepseek-v4-flash"
+
+    # A response that already carries a model is left untouched.
+    set_response = ModelResponse(id="r2", model="claude-3-7-sonnet-20250219", created=0)
+    untouched = logging_obj._backfill_anthropic_messages_model(set_response)
+    assert untouched.model == "claude-3-7-sonnet-20250219"
