@@ -749,28 +749,34 @@ def _select_model_name_for_cost_calc(
             completion_response_model = completion_response.get("model", None)
     hidden_params: dict | None = getattr(completion_response, "_hidden_params", None)
 
-    if custom_pricing is True:
-        if router_model_id is not None and router_model_id in litellm.model_cost:
-            entry = litellm.model_cost[router_model_id]
-            if (
-                entry.get("input_cost_per_token") is not None
-                or entry.get("input_cost_per_second") is not None
-                or entry.get("tiered_pricing") is not None
-            ):
-                return_model = router_model_id
-            else:
-                return_model = model
-        else:
-            return_model = model
+    # A router deployment's unique model_id entry carries that deployment's
+    # explicit per-token pricing. When it exists and is priced it is
+    # authoritative for cost calc regardless of the `custom_pricing` flag --
+    # that flag is derived separately from request-time metadata and can be
+    # False even for a correctly-priced deployment, in which case cost lookup
+    # would otherwise fall back to the shared backend alias whose pricing fields
+    # are deliberately stripped at registration -> spend 0.
+    if router_model_id is not None and router_model_id in litellm.model_cost:
+        entry = litellm.model_cost[router_model_id]
+        if (
+            entry.get("input_cost_per_token") is not None
+            or entry.get("input_cost_per_second") is not None
+            or entry.get("tiered_pricing") is not None
+        ):
+            return_model = router_model_id
 
-    elif base_model is not None:
+    if return_model is None and custom_pricing is True:
+        return_model = model
+
+    if return_model is None and base_model is not None:
         return_model = base_model
 
-    elif completion_response_model is None and hidden_params is not None:
-        if hidden_params.get("model", None) is not None and len(hidden_params["model"]) > 0:
-            return_model = hidden_params.get("model", model)
-    elif hidden_params is not None and hidden_params.get("region_name", None) is not None:
-        region_name = hidden_params.get("region_name", None)
+    if return_model is None:
+        if completion_response_model is None and hidden_params is not None:
+            if hidden_params.get("model", None) is not None and len(hidden_params["model"]) > 0:
+                return_model = hidden_params.get("model", model)
+        elif hidden_params is not None and hidden_params.get("region_name", None) is not None:
+            region_name = hidden_params.get("region_name", None)
 
     if return_model is None and completion_response_model is not None:
         return_model = completion_response_model
